@@ -1,0 +1,113 @@
+#!/bin/sh
+
+APP=naulab
+
+TARGETDIR=/opt/$APP
+TEMPDIR=/var/tmp/$APP
+
+
+echo 'Installing application and configuring your OS...'
+echo ''
+
+OS=`hostnamectl | sed -n 's/Operating System://p' | sed 's/^[ \t]*//;s/[ \t]*$//'`
+echo Your OS: $OS
+echo ''
+
+# TODO:
+#	Check wine version
+if wine --version 2>/dev/null; then
+	echo 'WINE installed. Starting the installation process...'
+	echo ''
+else
+	echo 'WINE not installed. Please install WINE before install application.'
+	echo 'run command ''sudo apt-get install wine'' or ''sudo dnf install wine'''
+	exit 1
+fi
+
+# Make temp dir
+sudo rm -rf $TEMPDIR
+sudo mkdir $TEMPDIR || exit 1
+sudo chmod 777 $TEMPDIR || exit 1
+
+# Extract app to temp dir
+sudo sed -n -e '1,/^exit 0$/!p' "$0" > "$TEMPDIR/$APP.tgz" 2>/dev/null
+cd $TEMPDIR || exit 1
+sudo tar xzf ./$APP.tgz	|| exit 1
+sudo rm -f ./$APP.tgz
+
+# Move app to dest dir
+sudo rm -rf $TARGETDIR || exit 1
+sudo mkdir $TARGETDIR || exit 1
+sudo cp -r $TEMPDIR/* $TARGETDIR || exit 1
+
+# Delete temporary dir
+sudo rm -rf $TEMPDIR
+
+cd $TARGETDIR
+sudo find . -type f -exec chmod 644 {} \;
+sudo find . -type d -exec chmod 755 {} \;
+sudo find . -type f \( -iname \*.exe -o -iname \*.bat -o -iname \*.cmd -o -iname \*.sh \) -exec chmod +x  {} \;
+
+
+#Add user to plugdev and dialout group
+if cat /etc/group | grep plugdev > /dev/null 2>&1; then
+    echo 'Group plugdev found.'
+    sudo gpasswd -a $USER plugdev || exit 1
+fi
+
+if cat /etc/group | grep dialout > /dev/null 2>&1; then
+    echo 'Group dialout found.'
+    sudo gpasswd -a $USER dialout || exit 1
+fi
+
+# Create udev rules
+sudo rm -f /etc/udev/rules.d/99-naura-sensors.rules || exit 1
+sudo mv $TARGETDIR/udev/99-naura-sensors.rules /etc/udev/rules.d/99-naura-sensors.rules || exit 1
+sudo rmdir $TARGETDIR/udev
+
+# Reload Udev rules
+sudo udevadm control --reload-rules || exit 1
+
+# Add rfcomm permissions
+sudo mv $TARGETDIR/sudoers.d/sudo-dialout-rfcomm /etc/sudoers.d/sudo-dialout-rfcomm || exit 1
+sudo rmdir $TARGETDIR/sudoers.d
+
+sudo rm -f $TARGETDIR/naulab-with-bt-flatpak.sh
+sudo rm -f $TARGETDIR/uninstall.flatpak.sh
+
+# Check desktop dir
+DESKTOP=`xdg-user-dir DESKTOP`
+
+# Create desktop app link
+rm -f "$DESKTOP"/$APP.desktop || exit 1
+sudo rm -f $TARGETDIR/$APP.flatpak.desktop || exit 1
+sudo mv $TARGETDIR/$APP.desktop "$DESKTOP"/$APP.desktop
+sudo chmod +x "$DESKTOP"/$APP.desktop || exit 1
+sudo chown $USER:$USER "$DESKTOP"/$APP.desktop || exit 1
+
+# Create desktop generator link
+rm -f "$DESKTOP"/generator.desktop || exit 1
+sudo rm -f $TARGETDIR/generator.flatpak.desktop || exit 1
+sudo mv $TARGETDIR/generator.desktop "$DESKTOP"/generator.desktop
+sudo chmod +x "$DESKTOP"/generator.desktop || exit 1
+sudo chown $USER:$USER "$DESKTOP"/generator.desktop || exit 1
+
+# Remove
+
+# Init WINE environment
+wineboot -i > /dev/null 2>&1
+
+# Import RFCOMM ports to WINE
+wine regedit $TARGETDIR/wine/wine_rfcomm.reg > /dev/null 2>&1
+
+# Import hidraw devices to WINE
+wine regedit $TARGETDIR/wine/wine_hidraw.reg > /dev/null 2>&1
+
+
+echo 'Close all WINE application to apply settings. Waiting...'
+
+# Wait for close all wine applications
+wineserver -w
+
+
+echo 'Aplication installed successfully.'
